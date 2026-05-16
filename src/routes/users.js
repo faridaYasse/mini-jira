@@ -3,7 +3,7 @@ const express = require("express");
 const router = express.Router();
 const { authenticate, isManager } = require("../middleware/auth");
 const { docClient } = require("../config/dynamodb");
-const { PutCommand, ScanCommand } = require("@aws-sdk/lib-dynamodb");
+const { PutCommand, ScanCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
 const { CognitoIdentityProviderClient, SignUpCommand, InitiateAuthCommand } = require("@aws-sdk/client-cognito-identity-provider");
 const { v4: uuidv4 } = require("uuid");
 
@@ -99,11 +99,16 @@ router.post("/teams/:teamId/members", authenticate, isManager, async (req, res) 
     const { teamId } = req.params;
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ message: "userId is required" });
-    await docClient.send(new PutCommand({
+    await docClient.send(new UpdateCommand({
       TableName: process.env.DYNAMODB_USERS_TABLE,
-      Item: { userId, teamId, updatedAt: new Date().toISOString() }
+      Key: { userId },
+      UpdateExpression: "SET teamId = :teamId, updatedAt = :updatedAt",
+      ExpressionAttributeValues: {
+        ":teamId": teamId,
+        ":updatedAt": new Date().toISOString(),
+      },
     }));
-    res.json({ message: "User added to team" });
+    res.json({ message: "User team updated successfully" });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
