@@ -1,22 +1,25 @@
 {
-  "name": "mini-jira-auth",
+  "name": "mini-jira-merged",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Merged Mini Jira Express backend.",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1048.0",
     "@aws-sdk/client-dynamodb": "^3.1047.0",
+    "@aws-sdk/client-s3": "^3.1047.0",
+    "@aws-sdk/client-sns": "^3.1047.0",
     "@aws-sdk/lib-dynamodb": "^3.1047.0",
+    "@aws-sdk/s3-request-presigner": "^3.1047.0",
     "aws-jwt-verify": "^5.1.1",
-    "cors": "^2.8.6",
+    "cors": "^2.8.5",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1",
-    "uuid": "^14.0.0"
+    "express": "^4.18.0",
+    "jose": "^5.0.0",
+    "multer": "^1.4.5-lts.1",
+    "node-fetch": "^3.0.0",
+    "uuid": "^9.0.0"
   }
 }
