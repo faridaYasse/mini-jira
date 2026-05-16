@@ -38,5 +38,8 @@ const isManager = (req, res, next) => {
 
   next();
 };
-
-module.exports = { authenticate, isManager };
+const enforceTeamAccess = (req, itemTeamId) => {
+  if (req.user.role === "manager") return true;
+  return req.user.teamId === itemTeamId;
+};
+module.exports = { authenticate, isManager, enforceTeamAccess };
