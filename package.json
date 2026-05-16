@@ -1,0 +1,22 @@
+{
+  "name": "mini-jira-auth",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.1048.0",
+    "@aws-sdk/client-dynamodb": "^3.1047.0",
+    "@aws-sdk/lib-dynamodb": "^3.1047.0",
+    "aws-jwt-verify": "^5.1.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "uuid": "^14.0.0"
+  }
+}
