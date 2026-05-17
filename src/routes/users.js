@@ -9,7 +9,7 @@ const { v4: uuidv4 } = require("uuid");
 
 const cognitoClient = new CognitoIdentityProviderClient({ region: process.env.COGNITO_REGION });
 
-// ✅ PUBLIC: Signup
+// ✅ PUBLIC: Signup as employee
 router.post("/signup", async (req, res) => {
   try {
     const { email, password, name, teamId } = req.body;
@@ -34,6 +34,36 @@ router.post("/signup", async (req, res) => {
       Item: { userId, email, name, role: userRole, teamId: teamId || "", createdAt: new Date().toISOString() }
     }));
     res.status(201).json({ message: "User registered! Check your email to confirm." });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// ✅ PUBLIC: Create manager (demo only)
+router.post("/create-manager", async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+    if (!email || !password || !name) {
+      return res.status(400).json({ message: "email, password, and name are required" });
+    }
+    const userRole = "manager";
+    const cognitoResult = await cognitoClient.send(new SignUpCommand({
+      ClientId: process.env.COGNITO_CLIENT_ID,
+      Username: email,
+      Password: password,
+      UserAttributes: [
+        { Name: "email", Value: email },
+        { Name: "name", Value: name },
+        { Name: "custom:role", Value: userRole },
+        { Name: "custom:teamId", Value: "" },
+      ],
+    }));
+    const userId = cognitoResult.UserSub;
+    await docClient.send(new PutCommand({
+      TableName: process.env.DYNAMODB_USERS_TABLE,
+      Item: { userId, email, name, role: userRole, teamId: "", createdAt: new Date().toISOString() }
+    }));
+    res.status(201).json({ message: "Manager registered! Check your email to confirm." });
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
