@@ -6,11 +6,14 @@ const {
   UpdateCommand,
   DeleteCommand,
 } = require('@aws-sdk/lib-dynamodb');
+
 const { v4: uuidv4 } = require('uuid');
 const dynamo = require('../config/dynamo');
 
 const TABLES = {
-  TASKS:    process.env.DYNAMODB_TASKS_TABLE,
+  USERS: process.env.DYNAMODB_USERS_TABLE,
+  TEAMS: process.env.DYNAMODB_TEAMS_TABLE,
+  TASKS: process.env.DYNAMODB_TASKS_TABLE,
   PROJECTS: process.env.DYNAMODB_PROJECTS_TABLE,
   COMMENTS: process.env.DYNAMODB_COMMENTS_TABLE,
   AUDITLOG: process.env.DYNAMODB_AUDITLOG_TABLE,
@@ -23,54 +26,98 @@ function serviceError(code, message) {
 }
 
 // ── Update expression builder ──────────────────────────────────────────────────
-//
-// Aliases every field through ExpressionAttributeNames so DynamoDB reserved
-// words (status, name, date, data, …) never cause ValidationException.
-//
-// Given: { status: 'done', title: 'New title' }
-// Produces:
-//   UpdateExpression:           "SET #status = :status, #title = :title, #updatedAt = :updatedAt"
-//   ExpressionAttributeNames:  { '#status': 'status', '#title': 'title', '#updatedAt': 'updatedAt' }
-//   ExpressionAttributeValues: { ':status': 'done', ':title': 'New title', ':updatedAt': '<iso>' }
-//
-// updatedAt is always injected, overwriting whatever the caller may have supplied.
+
 function buildUpdateExpression(updates) {
-  const sets   = [];
-  const names  = {};
+  const sets = [];
+  const names = {};
   const values = {};
 
   for (const [key, value] of Object.entries(updates)) {
-    if (key === 'updatedAt') continue; // injected below
+    if (key === 'updatedAt') continue;
+
     sets.push(`#${key} = :${key}`);
-    names[`#${key}`]  = key;
+    names[`#${key}`] = key;
     values[`:${key}`] = value;
   }
 
   sets.push('#updatedAt = :updatedAt');
-  names['#updatedAt']   = 'updatedAt';
-  values[':updatedAt']  = new Date().toISOString();
+  names['#updatedAt'] = 'updatedAt';
+  values[':updatedAt'] = new Date().toISOString();
 
   return {
-    UpdateExpression:           `SET ${sets.join(', ')}`,
-    ExpressionAttributeNames:  names,
+    UpdateExpression: `SET ${sets.join(', ')}`,
+    ExpressionAttributeNames: names,
     ExpressionAttributeValues: values,
   };
 }
 
 function paginationParams({ limit, lastKey } = {}) {
   const p = {};
-  if (limit)   p.Limit              = limit;
-  if (lastKey) p.ExclusiveStartKey  = lastKey;
+
+  if (limit) {
+    p.Limit = limit;
+  }
+
+  if (lastKey) {
+    p.ExclusiveStartKey = lastKey;
+  }
+
   return p;
+}
+
+// ── Users & Teams ──────────────────────────────────────────────────────────────
+
+async function getUserById(userId) {
+  try {
+    const { Item } = await dynamo.send(
+      new GetCommand({
+        TableName: TABLES.USERS,
+        Key: { userId },
+      })
+    );
+
+    return Item ?? null;
+  } catch (err) {
+    throw serviceError('USER_FETCH_FAILED', err.message);
+  }
+}
+
+async function getTeamById(teamId) {
+  try {
+    const { Item } = await dynamo.send(
+      new GetCommand({
+        TableName: TABLES.TEAMS,
+        Key: { teamId },
+      })
+    );
+
+    return Item ?? null;
+  } catch (err) {
+    throw serviceError('TEAM_FETCH_FAILED', err.message);
+  }
 }
 
 // ── Tasks ──────────────────────────────────────────────────────────────────────
 
 async function createTask(taskData) {
-  const now  = new Date().toISOString();
-  const item = { ...taskData, taskId: uuidv4(), createdAt: now, updatedAt: now };
+  const now = new Date().toISOString();
+
+  const item = {
+    ...taskData,
+    taskId: uuidv4(),
+    createdAt: now,
+    updatedAt: now,
+  };
+
   try {
-    await dynamo.send(new PutCommand({ TableName: TABLES.TASKS, Item: item }));
+    await dynamo.send(
+      new PutCommand({
+        TableName: TABLES.TASKS,
+        Item: item,
+        ConditionExpression: 'attribute_not_exists(taskId)',
+      })
+    );
+
     return item;
   } catch (err) {
     throw serviceError('TASK_CREATE_FAILED', err.message);
@@ -80,8 +127,12 @@ async function createTask(taskData) {
 async function getTaskById(taskId) {
   try {
     const { Item } = await dynamo.send(
-      new GetCommand({ TableName: TABLES.TASKS, Key: { taskId } })
+      new GetCommand({
+        TableName: TABLES.TASKS,
+        Key: { taskId },
+      })
     );
+
     return Item ?? null;
   } catch (err) {
     throw serviceError('TASK_FETCH_FAILED', err.message);
@@ -92,14 +143,43 @@ async function getTasksByTeam(teamId, options = {}) {
   try {
     const { Items, LastEvaluatedKey } = await dynamo.send(
       new QueryCommand({
-        TableName:                 TABLES.TASKS,
-        IndexName:                 'teamId-index',
-        KeyConditionExpression:    'teamId = :teamId',
-        ExpressionAttributeValues: { ':teamId': teamId },
+        TableName: TABLES.TASKS,
+        IndexName: 'teamId-index',
+        KeyConditionExpression: 'teamId = :teamId',
+        ExpressionAttributeValues: {
+          ':teamId': teamId,
+        },
         ...paginationParams(options),
       })
     );
-    return { items: Items, lastKey: LastEvaluatedKey ?? null };
+
+    return {
+      items: Items || [],
+      lastKey: LastEvaluatedKey ?? null,
+    };
+  } catch (err) {
+    throw serviceError('TASK_QUERY_FAILED', err.message);
+  }
+}
+
+async function getTasksByAssignee(assigneeId, options = {}) {
+  try {
+    const { Items, LastEvaluatedKey } = await dynamo.send(
+      new QueryCommand({
+        TableName: TABLES.TASKS,
+        IndexName: 'assigneeId-index',
+        KeyConditionExpression: 'assigneeId = :assigneeId',
+        ExpressionAttributeValues: {
+          ':assigneeId': assigneeId,
+        },
+        ...paginationParams(options),
+      })
+    );
+
+    return {
+      items: Items || [],
+      lastKey: LastEvaluatedKey ?? null,
+    };
   } catch (err) {
     throw serviceError('TASK_QUERY_FAILED', err.message);
   }
@@ -108,9 +188,16 @@ async function getTasksByTeam(teamId, options = {}) {
 async function getAllTasks(options = {}) {
   try {
     const { Items, LastEvaluatedKey } = await dynamo.send(
-      new ScanCommand({ TableName: TABLES.TASKS, ...paginationParams(options) })
+      new ScanCommand({
+        TableName: TABLES.TASKS,
+        ...paginationParams(options),
+      })
     );
-    return { items: Items, lastKey: LastEvaluatedKey ?? null };
+
+    return {
+      items: Items || [],
+      lastKey: LastEvaluatedKey ?? null,
+    };
   } catch (err) {
     throw serviceError('TASK_SCAN_FAILED', err.message);
   }
@@ -120,33 +207,48 @@ async function getTasksByProject(projectId, options = {}) {
   try {
     const { Items, LastEvaluatedKey } = await dynamo.send(
       new QueryCommand({
-        TableName:                 TABLES.TASKS,
-        IndexName:                 'projectId-index',
-        KeyConditionExpression:    'projectId = :projectId',
-        ExpressionAttributeValues: { ':projectId': projectId },
+        TableName: TABLES.TASKS,
+        IndexName: 'projectId-index',
+        KeyConditionExpression: 'projectId = :projectId',
+        ExpressionAttributeValues: {
+          ':projectId': projectId,
+        },
         ...paginationParams(options),
       })
     );
-    return { items: Items, lastKey: LastEvaluatedKey ?? null };
+
+    return {
+      items: Items || [],
+      lastKey: LastEvaluatedKey ?? null,
+    };
   } catch (err) {
     throw serviceError('TASK_QUERY_FAILED', err.message);
   }
 }
 
 async function updateTask(taskId, updates) {
-  const { UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues } =
-    buildUpdateExpression(updates);
+  if (!updates || Object.keys(updates).length === 0) {
+    throw serviceError('TASK_UPDATE_FAILED', 'No updates provided');
+  }
+
+  const {
+    UpdateExpression,
+    ExpressionAttributeNames,
+    ExpressionAttributeValues,
+  } = buildUpdateExpression(updates);
+
   try {
     const { Attributes } = await dynamo.send(
       new UpdateCommand({
-        TableName:                 TABLES.TASKS,
-        Key:                       { taskId },
+        TableName: TABLES.TASKS,
+        Key: { taskId },
         UpdateExpression,
         ExpressionAttributeNames,
         ExpressionAttributeValues,
-        ReturnValues:              'ALL_NEW',
+        ReturnValues: 'ALL_NEW',
       })
     );
+
     return Attributes;
   } catch (err) {
     throw serviceError('TASK_UPDATE_FAILED', err.message);
@@ -155,7 +257,12 @@ async function updateTask(taskId, updates) {
 
 async function deleteTask(taskId) {
   try {
-    await dynamo.send(new DeleteCommand({ TableName: TABLES.TASKS, Key: { taskId } }));
+    await dynamo.send(
+      new DeleteCommand({
+        TableName: TABLES.TASKS,
+        Key: { taskId },
+      })
+    );
   } catch (err) {
     throw serviceError('TASK_DELETE_FAILED', err.message);
   }
@@ -164,10 +271,24 @@ async function deleteTask(taskId) {
 // ── Projects ───────────────────────────────────────────────────────────────────
 
 async function createProject(data) {
-  const now  = new Date().toISOString();
-  const item = { ...data, projectId: uuidv4(), createdAt: now, updatedAt: now };
+  const now = new Date().toISOString();
+
+  const item = {
+    ...data,
+    projectId: uuidv4(),
+    createdAt: now,
+    updatedAt: now,
+  };
+
   try {
-    await dynamo.send(new PutCommand({ TableName: TABLES.PROJECTS, Item: item }));
+    await dynamo.send(
+      new PutCommand({
+        TableName: TABLES.PROJECTS,
+        Item: item,
+        ConditionExpression: 'attribute_not_exists(projectId)',
+      })
+    );
+
     return item;
   } catch (err) {
     throw serviceError('PROJECT_CREATE_FAILED', err.message);
@@ -177,8 +298,12 @@ async function createProject(data) {
 async function getProjectById(projectId) {
   try {
     const { Item } = await dynamo.send(
-      new GetCommand({ TableName: TABLES.PROJECTS, Key: { projectId } })
+      new GetCommand({
+        TableName: TABLES.PROJECTS,
+        Key: { projectId },
+      })
     );
+
     return Item ?? null;
   } catch (err) {
     throw serviceError('PROJECT_FETCH_FAILED', err.message);
@@ -187,27 +312,41 @@ async function getProjectById(projectId) {
 
 async function getAllProjects() {
   try {
-    const { Items } = await dynamo.send(new ScanCommand({ TableName: TABLES.PROJECTS }));
-    return Items;
+    const { Items } = await dynamo.send(
+      new ScanCommand({
+        TableName: TABLES.PROJECTS,
+      })
+    );
+
+    return Items || [];
   } catch (err) {
     throw serviceError('PROJECT_SCAN_FAILED', err.message);
   }
 }
 
 async function updateProject(projectId, updates) {
-  const { UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues } =
-    buildUpdateExpression(updates);
+  if (!updates || Object.keys(updates).length === 0) {
+    throw serviceError('PROJECT_UPDATE_FAILED', 'No updates provided');
+  }
+
+  const {
+    UpdateExpression,
+    ExpressionAttributeNames,
+    ExpressionAttributeValues,
+  } = buildUpdateExpression(updates);
+
   try {
     const { Attributes } = await dynamo.send(
       new UpdateCommand({
-        TableName:                 TABLES.PROJECTS,
-        Key:                       { projectId },
+        TableName: TABLES.PROJECTS,
+        Key: { projectId },
         UpdateExpression,
         ExpressionAttributeNames,
         ExpressionAttributeValues,
-        ReturnValues:              'ALL_NEW',
+        ReturnValues: 'ALL_NEW',
       })
     );
+
     return Attributes;
   } catch (err) {
     throw serviceError('PROJECT_UPDATE_FAILED', err.message);
@@ -216,7 +355,12 @@ async function updateProject(projectId, updates) {
 
 async function deleteProject(projectId) {
   try {
-    await dynamo.send(new DeleteCommand({ TableName: TABLES.PROJECTS, Key: { projectId } }));
+    await dynamo.send(
+      new DeleteCommand({
+        TableName: TABLES.PROJECTS,
+        Key: { projectId },
+      })
+    );
   } catch (err) {
     throw serviceError('PROJECT_DELETE_FAILED', err.message);
   }
@@ -225,9 +369,25 @@ async function deleteProject(projectId) {
 // ── Comments ───────────────────────────────────────────────────────────────────
 
 async function createComment(taskId, data) {
-  const item = { ...data, commentId: uuidv4(), taskId, createdAt: new Date().toISOString() };
+  const now = new Date().toISOString();
+
+  const item = {
+    ...data,
+    commentId: uuidv4(),
+    taskId,
+    createdAt: now,
+    updatedAt: now,
+  };
+
   try {
-    await dynamo.send(new PutCommand({ TableName: TABLES.COMMENTS, Item: item }));
+    await dynamo.send(
+      new PutCommand({
+        TableName: TABLES.COMMENTS,
+        Item: item,
+        ConditionExpression: 'attribute_not_exists(commentId)',
+      })
+    );
+
     return item;
   } catch (err) {
     throw serviceError('COMMENT_CREATE_FAILED', err.message);
@@ -238,16 +398,76 @@ async function getCommentsByTask(taskId) {
   try {
     const { Items } = await dynamo.send(
       new QueryCommand({
-        TableName:                 TABLES.COMMENTS,
-        IndexName:                 'taskId-index',
-        KeyConditionExpression:    'taskId = :taskId',
-        ExpressionAttributeValues: { ':taskId': taskId },
-        ScanIndexForward:          true, // ascending createdAt (sort key on the GSI)
+        TableName: TABLES.COMMENTS,
+        IndexName: 'taskId-index',
+        KeyConditionExpression: 'taskId = :taskId',
+        ExpressionAttributeValues: {
+          ':taskId': taskId,
+        },
+        ScanIndexForward: true,
       })
     );
-    return Items;
+
+    return Items || [];
   } catch (err) {
     throw serviceError('COMMENT_QUERY_FAILED', err.message);
+  }
+}
+
+async function getCommentById(commentId) {
+  try {
+    const { Item } = await dynamo.send(
+      new GetCommand({
+        TableName: TABLES.COMMENTS,
+        Key: { commentId },
+      })
+    );
+
+    return Item ?? null;
+  } catch (err) {
+    throw serviceError('COMMENT_FETCH_FAILED', err.message);
+  }
+}
+
+async function updateComment(commentId, updates) {
+  if (!updates || Object.keys(updates).length === 0) {
+    throw serviceError('COMMENT_UPDATE_FAILED', 'No updates provided');
+  }
+
+  const {
+    UpdateExpression,
+    ExpressionAttributeNames,
+    ExpressionAttributeValues,
+  } = buildUpdateExpression(updates);
+
+  try {
+    const { Attributes } = await dynamo.send(
+      new UpdateCommand({
+        TableName: TABLES.COMMENTS,
+        Key: { commentId },
+        UpdateExpression,
+        ExpressionAttributeNames,
+        ExpressionAttributeValues,
+        ReturnValues: 'ALL_NEW',
+      })
+    );
+
+    return Attributes;
+  } catch (err) {
+    throw serviceError('COMMENT_UPDATE_FAILED', err.message);
+  }
+}
+
+async function deleteComment(commentId) {
+  try {
+    await dynamo.send(
+      new DeleteCommand({
+        TableName: TABLES.COMMENTS,
+        Key: { commentId },
+      })
+    );
+  } catch (err) {
+    throw serviceError('COMMENT_DELETE_FAILED', err.message);
   }
 }
 
@@ -255,15 +475,22 @@ async function getCommentsByTask(taskId) {
 
 async function writeAuditEntry({ taskId, changedBy, fromStatus, toStatus }) {
   const item = {
-    logId:      uuidv4(),
+    logId: uuidv4(),
     taskId,
     changedBy,
     fromStatus,
     toStatus,
-    createdAt:  new Date().toISOString(),
+    createdAt: new Date().toISOString(),
   };
+
   try {
-    await dynamo.send(new PutCommand({ TableName: TABLES.AUDITLOG, Item: item }));
+    await dynamo.send(
+      new PutCommand({
+        TableName: TABLES.AUDITLOG,
+        Item: item,
+      })
+    );
+
     return item;
   } catch (err) {
     throw serviceError('AUDIT_WRITE_FAILED', err.message);
@@ -271,23 +498,34 @@ async function writeAuditEntry({ taskId, changedBy, fromStatus, toStatus }) {
 }
 
 module.exports = {
+  // users & teams
+  getUserById,
+  getTeamById,
+
   // tasks
   createTask,
   getTaskById,
   getTasksByTeam,
+  getTasksByAssignee,
   getAllTasks,
   getTasksByProject,
   updateTask,
   deleteTask,
+
   // projects
   createProject,
   getProjectById,
   getAllProjects,
   updateProject,
   deleteProject,
+
   // comments
   createComment,
   getCommentsByTask,
+  getCommentById,
+  updateComment,
+  deleteComment,
+
   // audit
   writeAuditEntry,
 };
