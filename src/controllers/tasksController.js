@@ -4,6 +4,7 @@ const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
 
 const dynamoService = require('../services/dynamoService');
 const s3Service = require('../services/s3Service');
+const { publishMetric } = require('../services/cloudWatchMetrics');
 
 const sns = new SNSClient({
   region: process.env.AWS_REGION || process.env.DYNAMODB_REGION || process.env.COGNITO_REGION,
@@ -165,6 +166,10 @@ async function createTask(req, res, next) {
       console.warn('SNS_TASK_ASSIGNMENT_TOPIC is not configured. Skipping SNS publish.');
     }
 
+    await publishMetric('TasksCreatedPerDay', 1, 'Count', {
+      TeamId: task.teamId || teamId,
+    });
+
     return res.status(201).json(task);
   } catch (err) {
     return next(err);
@@ -305,7 +310,32 @@ async function updateTask(req, res, next) {
       }
     }
 
+    const isClosingTask = updates.status === 'Done' && task.status !== 'Done';
     const updated = await dynamoService.updateTask(taskId, updates);
+
+    if (isClosingTask) {
+      const teamId = task.teamId || updated?.teamId;
+      const metrics = [
+        publishMetric('TasksClosedPerDay', 1, 'Count', { TeamId: teamId }),
+      ];
+
+      const createdAt = task.createdAt ? new Date(task.createdAt) : null;
+      const createdAtMs = createdAt?.getTime();
+
+      if (Number.isFinite(createdAtMs)) {
+        const hoursToClose = (Date.now() - createdAtMs) / (1000 * 60 * 60);
+
+        if (hoursToClose >= 0) {
+          metrics.push(
+            publishMetric('AverageTimeToClose', hoursToClose, 'None', {
+              TeamId: teamId,
+            })
+          );
+        }
+      }
+
+      await Promise.all(metrics);
+    }
 
     return res.json(await enrichWithImageUrl(updated));
   } catch (err) {

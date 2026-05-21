@@ -1,8 +1,11 @@
 import { DynamoDBClient, ScanCommand } from "@aws-sdk/client-dynamodb";
+import { CloudWatchClient, PutMetricDataCommand } from "@aws-sdk/client-cloudwatch";
 import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
 
-const dynamo = new DynamoDBClient({});
-const sns = new SNSClient({});
+const region = process.env.AWS_REGION || process.env.DYNAMODB_REGION || "us-east-1";
+const dynamo = new DynamoDBClient({ region });
+const cw = new CloudWatchClient({ region });
+const sns = new SNSClient({ region });
 
 const TASKS_TABLE = process.env.TASKS_TABLE;
 const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN;
@@ -10,6 +13,33 @@ const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN;
 export const handler = async () => {
   const today = new Date().toISOString().split("T")[0];
   console.log(`Running daily digest for ${today}`);
+
+  const overdueResult = await dynamo.send(new ScanCommand({
+    TableName: TASKS_TABLE,
+    Select: "COUNT",
+    FilterExpression: "deadline < :today AND #s <> :done",
+    ExpressionAttributeNames: { "#s": "status" },
+    ExpressionAttributeValues: {
+      ":today": { S: today },
+      ":done":  { S: "Done" }
+    }
+  }));
+
+  const overdueCount = overdueResult.Count || 0;
+  console.log(`Found ${overdueCount} overdue tasks`);
+
+  try {
+    await cw.send(new PutMetricDataCommand({
+      Namespace: "MiniJira/Tasks",
+      MetricData: [{
+        MetricName: "OverdueTasks",
+        Value: overdueCount,
+        Unit: "Count"
+      }]
+    }));
+  } catch (err) {
+    console.error("CloudWatch metric publish failed: OverdueTasks", err);
+  }
 
   const result = await dynamo.send(new ScanCommand({
     TableName: TASKS_TABLE,
