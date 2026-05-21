@@ -9,8 +9,9 @@ async function request(path, options = {}) {
     throw new Error('Please sign in before using the board.');
   }
 
+  const isFormData = options.body instanceof FormData;
   const headers = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     Authorization: `Bearer ${token}`,
     ...options.headers,
   };
@@ -27,11 +28,13 @@ async function request(path, options = {}) {
   if (!response.ok) {
     if (response.status === 401) {
       logout();
+      window.dispatchEvent(new CustomEvent('mini-jira-session-expired'));
     }
 
     const message =
       payload?.error?.message ||
       payload?.error ||
+      payload?.message ||
       `Request failed with status ${response.status}`;
     throw new Error(message);
   }
@@ -43,8 +46,74 @@ export function listProjects() {
   return request('/api/projects');
 }
 
-export function listTasks() {
-  return request('/api/tasks');
+export function createProject(project) {
+  return request('/api/projects', {
+    method: 'POST',
+    body: JSON.stringify(project),
+  });
+}
+
+export function updateProject(projectId, project) {
+  return request(`/api/projects/${projectId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(project),
+  });
+}
+
+export function deleteProject(projectId) {
+  return request(`/api/projects/${projectId}`, {
+    method: 'DELETE',
+  });
+}
+
+export function createTeam(team) {
+  return request('/api/users/teams', {
+    method: 'POST',
+    body: JSON.stringify(team),
+  });
+}
+
+export function createEmployee(user) {
+  return request('/api/users/signup', {
+    method: 'POST',
+    body: JSON.stringify(user),
+  });
+}
+
+export function assignUserToTeam(teamId, membership) {
+  return request(`/api/users/teams/${teamId}/members`, {
+    method: 'POST',
+    body: JSON.stringify(membership),
+  });
+}
+
+export function listTasks(teamId) {
+  const query = teamId && teamId !== 'all' ? `?teamId=${encodeURIComponent(teamId)}` : '';
+  return request(`/api/tasks${query}`);
+}
+
+export function createTask(taskData) {
+  const hasImage = taskData.image instanceof File;
+
+  if (hasImage) {
+    const formData = new FormData();
+    Object.entries(taskData).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        formData.append(key, value);
+      }
+    });
+
+    return request('/api/tasks', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  const { image: _image, ...payload } = taskData;
+  return request('/api/tasks', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function updateTask(taskId, updates) {
@@ -52,6 +121,34 @@ export function updateTask(taskId, updates) {
     method: 'PATCH',
     body: JSON.stringify(updates),
   });
+}
+
+export function deleteTask(taskId) {
+  return request(`/api/tasks/${taskId}`, {
+    method: 'DELETE',
+  });
+}
+
+export function uploadTaskImage(taskId, image) {
+  const formData = new FormData();
+  formData.append('image', image);
+
+  return request(`/api/tasks/${taskId}/image`, {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+export function listUsers() {
+  return request('/api/users');
+}
+
+export function listTeams() {
+  return request('/api/users/teams');
+}
+
+export function getProfile() {
+  return request('/api/users/me');
 }
 
 export function listComments(taskId) {

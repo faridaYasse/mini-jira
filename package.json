@@ -4,7 +4,8 @@
   "description": "Merged Mini Jira Express backend.",
   "main": "index.js",
 "scripts": {
-  "start": "node index.js"
+  "start": "node index.js",
+  "seed:teams": "node scripts/seedTeams.js"
 },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1048.0",
