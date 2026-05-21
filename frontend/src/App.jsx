@@ -405,10 +405,6 @@ export default function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">Member 2 workspace</p>
-          <h1>Mini Jira Board</h1>
-        </div>
         <div className="topbar-actions">
           {isManager && (
             <>
