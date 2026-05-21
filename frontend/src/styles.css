@@ -740,6 +740,14 @@ select {
   margin: 6px 0 0;
 }
 
+.monitoring-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 .comment header {
   align-items: center;
   display: flex;
@@ -803,6 +811,10 @@ select {
 
   .metric-grid {
     grid-template-columns: 1fr;
+  }
+
+  .monitoring-actions {
+    flex-direction: column;
   }
 
   .split-actions {

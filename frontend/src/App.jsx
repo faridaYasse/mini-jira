@@ -1440,20 +1440,38 @@ function MonitoringModal({ open, onOpenChange }) {
           <div className="metric-grid">
             <article>
               <strong>CloudWatch Dashboard</strong>
-              <p>infra/member2-monitoring.yml defines the four-widget dashboard.</p>
+              <p>Tracks tasks created per day, tasks closed per team, average time-to-close, and EC2 CPU usage.</p>
             </article>
             <article>
               <strong>Overdue Alarm</strong>
-              <p>Alarm watches the MiniJira/Tasks OverdueTasks metric and publishes to SNS.</p>
+              <p>Watches overdue task count and publishes alerts to SNS when the threshold is exceeded.</p>
             </article>
             <article>
               <strong>Board Activity</strong>
-              <p>Tracks task status changes, comments, and task image uploads.</p>
+              <p>Tracks status changes, comments, assignments, and image upload activity.</p>
             </article>
             <article>
               <strong>Assignments</strong>
-              <p>Assignment worker metrics feed the notification widget.</p>
+              <p>Assignment events are sent through SNS/SQS and recorded by the worker Lambda.</p>
             </article>
+          </div>
+          <div className="monitoring-actions">
+            <a
+              className="secondary-button icon-text"
+              href="https://console.aws.amazon.com/cloudwatch/home"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open CloudWatch Dashboard
+            </a>
+            <a
+              className="secondary-button icon-text"
+              href="https://console.aws.amazon.com/cloudwatch/home#alarmsV2:"
+              target="_blank"
+              rel="noreferrer"
+            >
+              View Alarm Status
+            </a>
           </div>
         </Dialog.Content>
       </Dialog.Portal>
