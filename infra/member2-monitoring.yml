@@ -1,0 +1,187 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Member 2 monitoring resources for the Mini Jira frontend and task board.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: mini-jira
+  EnvironmentName:
+    Type: String
+    Default: dev
+  ApiLoadBalancerFullName:
+    Type: String
+    Default: ''
+    Description: Optional ALB full name for API metrics, for example app/name/id.
+  ApiTargetGroupFullName:
+    Type: String
+    Default: ''
+    Description: Optional target group full name for API target metrics.
+  OverdueTaskThreshold:
+    Type: Number
+    Default: 1
+    MinValue: 1
+  AlarmEmail:
+    Type: String
+    Default: ''
+    Description: Optional email endpoint for overdue task alarm notifications.
+
+Conditions:
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, '']]
+  HasAlbMetrics: !Not [!Equals [!Ref ApiLoadBalancerFullName, '']]
+  HasTargetGroupMetrics: !Not [!Equals [!Ref ApiTargetGroupFullName, '']]
+  HasAlbAndTargetMetrics: !And
+    - !Condition HasAlbMetrics
+    - !Condition HasTargetGroupMetrics
+
+Resources:
+  OverdueTasksTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-${EnvironmentName}-overdue-tasks'
+      DisplayName: Mini Jira overdue task alerts
+
+  OverdueTasksEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      Endpoint: !Ref AlarmEmail
+      Protocol: email
+      TopicArn: !Ref OverdueTasksTopic
+
+  OverdueTasksAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-overdue-tasks'
+      AlarmDescription: Alerts when the custom overdue task metric reaches the configured threshold.
+      Namespace: MiniJira/Tasks
+      MetricName: OverdueTasks
+      Dimensions:
+        - Name: Environment
+          Value: !Ref EnvironmentName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: !Ref OverdueTaskThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OverdueTasksTopic
+      OKActions:
+        - !Ref OverdueTasksTopic
+
+  Member2Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${ProjectName}-${EnvironmentName}-member2'
+      DashboardBody: !Sub
+        - |
+          {
+            "start": "-PT6H",
+            "periodOverride": "inherit",
+            "widgets": [
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 0,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "title": "Task API health",
+                  "view": "timeSeries",
+                  "region": "${AWS::Region}",
+                  "metrics": ${ApiHealthMetrics},
+                  "stat": "Sum",
+                  "period": 300
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12,
+                "y": 0,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "title": "Overdue tasks",
+                  "view": "singleValue",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    [ "MiniJira/Tasks", "OverdueTasks", "Environment", "${EnvironmentName}" ]
+                  ],
+                  "stat": "Maximum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 6,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "title": "Task board activity",
+                  "view": "timeSeries",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    [ "MiniJira/Tasks", "TaskStatusChanged", "Environment", "${EnvironmentName}" ],
+                    [ ".", "CommentsCreated", ".", "." ],
+                    [ ".", "TaskImagesUploaded", ".", "." ]
+                  ],
+                  "stat": "Sum",
+                  "period": 300
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12,
+                "y": 6,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "title": "Assignment notifications",
+                  "view": "timeSeries",
+                  "region": "${AWS::Region}",
+                  "metrics": ${AssignmentMetrics},
+                  "stat": "Sum",
+                  "period": 300
+                }
+              }
+            ]
+          }
+        - ApiHealthMetrics: !If
+            - HasAlbMetrics
+            - !Sub |
+              [
+                [ "AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${ApiLoadBalancerFullName}" ],
+                [ ".", "HTTPCode_Target_5XX_Count", ".", "." ],
+                [ ".", "TargetResponseTime", ".", ".", { "stat": "Average" } ]
+              ]
+            - !Sub |
+              [
+                [ "MiniJira/API", "Requests", "Environment", "${EnvironmentName}" ],
+                [ ".", "Errors", ".", "." ],
+                [ ".", "LatencyMs", ".", ".", { "stat": "Average" } ]
+              ]
+          AssignmentMetrics: !If
+            - HasAlbAndTargetMetrics
+            - !Sub |
+              [
+                [ "MiniJira/Assignments", "NotificationsPublished", "Environment", "${EnvironmentName}" ],
+                [ ".", "AssignmentWorkerProcessed", ".", "." ],
+                [ "AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", "${ApiTargetGroupFullName}", "LoadBalancer", "${ApiLoadBalancerFullName}", { "stat": "Average" } ]
+              ]
+            - !Sub |
+              [
+                [ "MiniJira/Assignments", "NotificationsPublished", "Environment", "${EnvironmentName}" ],
+                [ ".", "AssignmentWorkerProcessed", ".", "." ],
+                [ ".", "AssignmentWorkerFailures", ".", "." ]
+              ]
+
+Outputs:
+  DashboardName:
+    Value: !Ref Member2Dashboard
+  OverdueTasksTopicArn:
+    Value: !Ref OverdueTasksTopic
+  OverdueTasksAlarmName:
+    Value: !Ref OverdueTasksAlarm
