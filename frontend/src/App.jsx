@@ -8,6 +8,8 @@ import {
   Clock3,
   BarChart3,
   FolderPlus,
+  Eye,
+  EyeOff,
   Loader2,
   MessageSquare,
   Plus,
@@ -36,6 +38,7 @@ import {
   listTasks,
   listTeams,
   listUsers,
+  signUpPendingUser,
   updateProject,
   updateTask,
   uploadTaskImage,
@@ -129,23 +132,35 @@ function getUserLabel(users, userId) {
 }
 
 function getUserId(user) {
-  return user.userId;
+  return user?.userId;
 }
 
 function getUserRole(user) {
-  return String(user.role || user['custom:role'] || '').toLowerCase();
+  return String(user?.role || user?.['custom:role'] || '').toLowerCase();
 }
 
 function getUserTeamId(user) {
-  return String(user.teamId || user['custom:teamId'] || '');
+  return String(user?.teamId || user?.['custom:teamId'] || '');
 }
 
 function getUserDisplayName(user) {
-  return user.name || user.email || user.userId;
+  return user?.name || user?.email || user?.userId || '';
 }
 
 function getEmployeeUsers(users) {
   return users.filter((user) => getUserRole(user) === 'employee' && getUserId(user));
+}
+
+function getManageableMemberUsers(users) {
+  return users.filter((user) => {
+    const role = getUserRole(user);
+    return getUserId(user) && (role === 'employee' || role === 'pending' || user.status === 'pending_approval');
+  });
+}
+
+function isPendingMember(user) {
+  const role = getUserRole(user);
+  return role === 'pending' || user?.status === 'pending_approval';
 }
 
 function getTeamOptions(teams, users = []) {
@@ -186,6 +201,41 @@ function getAssignableTeamOptions(teams, users = []) {
   );
 }
 
+function getFriendlyAuthError(error, fallback = 'Authentication failed. Please try again.') {
+  const code = error?.code || error?.name;
+  const message = String(error?.message || '');
+
+  if (code === 'UserNotConfirmedException' || /not confirmed/i.test(message)) {
+    return 'Your account is not confirmed yet. Please confirm your email or ask the manager/admin to confirm it in AWS Cognito.';
+  }
+
+  if (code === 'NotAuthorizedException' || /incorrect username or password/i.test(message)) {
+    return 'Incorrect email or password.';
+  }
+
+  if (code === 'UserNotFoundException') {
+    return 'No account found with this email.';
+  }
+
+  if (code === 'UsernameExistsException') {
+    return 'An account with this email already exists.';
+  }
+
+  if (code === 'InvalidPasswordException') {
+    return 'Password does not meet the required security rules.';
+  }
+
+  if (code === 'InvalidParameterException') {
+    return 'Please check your information and try again.';
+  }
+
+  if (message.toLowerCase().includes('network') || message.toLowerCase().includes('fetch')) {
+    return 'Connection error. Please try again.';
+  }
+
+  return fallback;
+}
+
 export default function App() {
   const [idToken, setIdToken] = useState(() => getStoredIdToken());
   const currentUser = useMemo(() => decodeUser(idToken), [idToken]);
@@ -204,6 +254,7 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [isPendingApproval, setIsPendingApproval] = useState(false);
   const [sessionMessage, setSessionMessage] = useState('');
   const [draggedTaskId, setDraggedTaskId] = useState(null);
   const [savingTaskId, setSavingTaskId] = useState(null);
@@ -235,7 +286,13 @@ export default function App() {
     }
 
     if (userResult.status === 'fulfilled') {
-      setUsers(normalizeList(userResult.value));
+      const loadedUsers = normalizeList(userResult.value);
+      const pendingCount = loadedUsers.filter((user) => user.status === 'pending_approval').length;
+      console.debug('Manage Members users loaded', {
+        total: loadedUsers.length,
+        pending: pendingCount,
+      });
+      setUsers(loadedUsers);
     }
 
     if (profileResult.status === 'fulfilled') {
@@ -252,7 +309,18 @@ export default function App() {
         loadReferenceData(),
       ]);
       setTasks(normalizeList(taskResult).map(normalizeTask));
+      setIsPendingApproval(false);
     } catch (error) {
+      if (error.code === 'PENDING_APPROVAL') {
+        setIsPendingApproval(true);
+        setTasks([]);
+        setProjects([]);
+        setUsers([]);
+        setTeams([]);
+        setProfile(null);
+        return;
+      }
+
       setLoadError(error.message);
       toast.error(error.message);
     } finally {
@@ -261,16 +329,17 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (idToken) {
+    if (idToken && !isPendingApproval) {
       loadBoard();
     } else {
       setIsLoading(false);
     }
-  }, [idToken, teamFilter]);
+  }, [idToken, isPendingApproval, teamFilter]);
 
   useEffect(() => {
     function handleSessionExpired() {
       setSessionMessage('Session expired. Please sign in again.');
+      setIsPendingApproval(false);
       setIdToken(null);
       setTasks([]);
       setProjects([]);
@@ -393,10 +462,42 @@ export default function App() {
     return (
       <LoginScreen
         message={sessionMessage}
-        onLogin={(tokens) => {
-          setIdToken(tokens.idToken);
-          setSessionMessage('');
-          toast.success('Signed in');
+        onLogin={async (tokens) => {
+          try {
+            await getProfile();
+            setIdToken(tokens.idToken);
+            setIsPendingApproval(false);
+            setSessionMessage('');
+            toast.success('Signed in');
+          } catch (error) {
+            setIdToken(tokens.idToken);
+            setSessionMessage('');
+            if (error.code === 'PENDING_APPROVAL') {
+              setIsPendingApproval(true);
+              return;
+            }
+
+            logout();
+            setIdToken(null);
+            throw error;
+          }
+        }}
+      />
+    );
+  }
+
+  if (isPendingApproval) {
+    return (
+      <PendingApprovalPage
+        onSignOut={() => {
+          logout();
+          setIdToken(null);
+          setIsPendingApproval(false);
+          setTasks([]);
+          setProjects([]);
+          setUsers([]);
+          setTeams([]);
+          setProfile(null);
         }}
       />
     );
@@ -445,6 +546,7 @@ export default function App() {
             onClick={() => {
               logout();
               setIdToken(null);
+              setIsPendingApproval(false);
               setTasks([]);
               setProjects([]);
               setUsers([]);
@@ -638,22 +740,77 @@ export default function App() {
 }
 
 function LoginScreen({ message, onLogin }) {
+  const [mode, setMode] = useState('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formMessage, setFormMessage] = useState(message || '');
+  const [successMessage, setSuccessMessage] = useState('');
+
+  useEffect(() => {
+    setFormMessage(message || '');
+  }, [message]);
 
   async function handleSubmit(event) {
     event.preventDefault();
+    setFormMessage('');
+    setSuccessMessage('');
+
+    if (mode === 'signin' && (!email.trim() || !password)) {
+      setFormMessage('Please enter both email and password.');
+      return;
+    }
+
+    if (mode === 'signup') {
+      if (!name.trim() || !email.trim() || !password) {
+        setFormMessage('Please complete all required fields.');
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        setFormMessage('Passwords do not match.');
+        return;
+      }
+    }
 
     setIsSubmitting(true);
     try {
-      const tokens = await loginWithCognito(email.trim(), password);
-      onLogin(tokens);
+      if (mode === 'signin') {
+        const tokens = await loginWithCognito(email.trim().toLowerCase(), password);
+        await onLogin(tokens);
+        return;
+      }
+
+      await signUpPendingUser({
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+        password,
+      });
+      setPassword('');
+      setConfirmPassword('');
+      setMode('signin');
+      setSuccessMessage(
+        'Account created successfully. Please confirm your account if required, then wait for manager/admin approval.'
+      );
     } catch (error) {
-      toast.error(error.message || 'Unable to sign in');
+      const friendly = getFriendlyAuthError(error);
+      setFormMessage(friendly);
+      toast.error(friendly);
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function switchMode(nextMode) {
+    setMode(nextMode);
+    setFormMessage('');
+    setSuccessMessage('');
+    setPassword('');
+    setConfirmPassword('');
   }
 
   return (
@@ -661,9 +818,26 @@ function LoginScreen({ message, onLogin }) {
       <form className="login-panel" onSubmit={handleSubmit}>
         <div>
           <p className="eyebrow">Mini Jira</p>
-          <h1>Sign in</h1>
+          <h1>{mode === 'signin' ? 'Mini-Jira' : 'Create account'}</h1>
+          <p className="login-subtitle">
+            {mode === 'signin'
+              ? 'Sign in to manage your team tasks'
+              : 'Create your account, then wait for manager/admin approval'}
+          </p>
         </div>
-        {message && <div className="inline-alert">{message}</div>}
+        {formMessage && <div className="inline-alert">{formMessage}</div>}
+        {successMessage && <div className="inline-alert success-alert">{successMessage}</div>}
+        {mode === 'signup' && (
+          <label>
+            Full name
+            <input
+              autoComplete="name"
+              required
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+        )}
         <label>
           Email
           <input
@@ -676,18 +850,97 @@ function LoginScreen({ message, onLogin }) {
         </label>
         <label>
           Password
-          <input
-            autoComplete="current-password"
-            required
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
+          <span className="password-field">
+            <input
+              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+              required
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+            <button
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              className="password-toggle"
+              type="button"
+              onClick={() => setShowPassword((current) => !current)}
+            >
+              {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+            </button>
+          </span>
         </label>
+        {mode === 'signup' && (
+          <label>
+            Confirm password
+            <span className="password-field">
+              <input
+                autoComplete="new-password"
+                required
+                type={showConfirmPassword ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+              />
+              <button
+                aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                className="password-toggle"
+                type="button"
+                onClick={() => setShowConfirmPassword((current) => !current)}
+              >
+                {showConfirmPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </span>
+          </label>
+        )}
         <button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? 'Signing in...' : 'Sign in'}
+          {isSubmitting
+            ? mode === 'signin' ? 'Signing in...' : 'Creating account...'
+            : mode === 'signin' ? 'Sign in' : 'Create account'}
         </button>
+        {mode === 'signin' && (
+          <button
+            className="text-button"
+            type="button"
+            onClick={() => {
+              const text = 'Please contact your manager/admin to reset your password.';
+              setFormMessage(text);
+              toast(text);
+            }}
+          >
+            Forgot password?
+          </button>
+        )}
+        <p className="auth-switch">
+          {mode === 'signin' ? 'Need an account?' : 'Already have an account?'}
+          <button
+            type="button"
+            onClick={() => switchMode(mode === 'signin' ? 'signup' : 'signin')}
+          >
+            {mode === 'signin' ? 'Create account' : 'Sign in'}
+          </button>
+        </p>
       </form>
+    </main>
+  );
+}
+
+function PendingApprovalPage({ onSignOut }) {
+  return (
+    <main className="login-shell">
+      <section className="login-panel pending-panel">
+        <div>
+          <p className="eyebrow">Mini Jira</p>
+          <h1>Account pending approval</h1>
+          <p className="login-subtitle">
+            Your account was created successfully, but it has not been assigned to a role or team yet.
+            Please ask your manager/admin to approve your account.
+          </p>
+        </div>
+        <div className="inline-alert">
+          After approval, sign in again to access your team tasks.
+        </div>
+        <button type="button" onClick={onSignOut}>
+          Sign out
+        </button>
+      </section>
     </main>
   );
 }
@@ -1213,12 +1466,21 @@ function EmployeeFormModal({ open, onOpenChange, teams, onCreated }) {
 }
 
 function MemberManagerModal({ open, onOpenChange, teams, users, onChanged }) {
-  const employeeUsers = getEmployeeUsers(users);
+  const employeeUsers = getManageableMemberUsers(users);
   const teamOptions = getTeamOptions(teams, users);
   const [selectedUserId, setSelectedUserId] = useState('');
   const [selectedTeamId, setSelectedTeamId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const selectedUser = employeeUsers.find((user) => getUserId(user) === selectedUserId);
+  const isSelectedPending = isPendingMember(selectedUser);
+
+  function getMemberOptionLabel(user) {
+    if (isPendingMember(user)) {
+      return `${getUserDisplayName(user)} (Pending approval)`;
+    }
+
+    return `${getUserDisplayName(user)} (${getTeamName(teams, getUserTeamId(user)) || 'No team'})`;
+  }
 
   useEffect(() => {
     if (!open) {
@@ -1237,7 +1499,11 @@ function MemberManagerModal({ open, onOpenChange, teams, users, onChanged }) {
         userId: getUserId(selectedUser),
         userEmail: selectedUser.email,
       });
-      toast.success('Team membership updated');
+      toast.success(
+        isSelectedPending
+          ? 'Employee approved and assigned to team. Ask them to sign out and sign in again.'
+          : 'Employee team updated. Ask them to sign out and sign in again.'
+      );
       await onChanged();
       setSelectedUserId('');
       setSelectedTeamId('');
@@ -1261,6 +1527,9 @@ function MemberManagerModal({ open, onOpenChange, teams, users, onChanged }) {
           </header>
 
           <form className="task-form member-form" onSubmit={handleAssign}>
+            <span className="form-hint">
+              Select a pending user and assign a team to approve their account.
+            </span>
             <div className="form-grid">
               <label>
                 Employee
@@ -1268,7 +1537,7 @@ function MemberManagerModal({ open, onOpenChange, teams, users, onChanged }) {
                   <option value="">Select employee</option>
                   {employeeUsers.map((user) => (
                     <option key={getUserId(user)} value={getUserId(user)}>
-                      {getUserDisplayName(user)}
+                      {getMemberOptionLabel(user)}
                     </option>
                   ))}
                 </select>
@@ -1288,13 +1557,13 @@ function MemberManagerModal({ open, onOpenChange, teams, users, onChanged }) {
             <div className="form-actions">
               <button className="primary-button" type="submit" disabled={isSaving || !selectedUserId || !selectedTeamId}>
                 {isSaving ? <Loader2 className="spin" size={17} /> : <UsersRound size={17} />}
-                Assign Team
+                Approve & Assign Team
               </button>
             </div>
           </form>
 
           {employeeUsers.length === 0 ? (
-            <div className="comments-empty">No employee users yet.</div>
+            <div className="comments-empty">No employee or pending users yet.</div>
           ) : (
             <div className="member-list">
               {employeeUsers.map((user) => (
@@ -1303,7 +1572,11 @@ function MemberManagerModal({ open, onOpenChange, teams, users, onChanged }) {
                     <strong>{getUserDisplayName(user)}</strong>
                     <p>{user.email || getUserId(user)}</p>
                   </div>
-                  <span>{getTeamName(teams, getUserTeamId(user)) || 'No team'}</span>
+                  <span>
+                    {isPendingMember(user)
+                      ? 'Pending approval'
+                      : getTeamName(teams, getUserTeamId(user)) || 'No team'}
+                  </span>
                 </article>
               ))}
             </div>

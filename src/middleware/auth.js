@@ -24,6 +24,8 @@ async function authenticateToken(req, res, next) {
     } catch {
       return res.status(401).json({ error: 'Invalid x-mock-user JSON' });
     }
+    const pending = getPendingApproval(req.user);
+    if (pending) return res.status(403).json(pending);
     return next();
   }
 
@@ -37,10 +39,15 @@ async function authenticateToken(req, res, next) {
     const { payload } = await jwtVerify(token, getJWKS());
     req.user = {
       userId: payload.sub,
-      role:   payload['custom:role'],
-      teamId: payload['custom:teamId'],
-      email:  payload.email,
+      role: normalizeRole(payload['custom:role']),
+      teamId: payload['custom:teamId'] || '',
+      email: payload.email,
+      name: payload.name,
     };
+
+    const pending = getPendingApproval(req.user);
+    if (pending) return res.status(403).json(pending);
+
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
@@ -48,7 +55,7 @@ async function authenticateToken(req, res, next) {
 }
 
 function isManager(req, res, next) {
-  if (req.user?.role !== 'manager') {
+  if (normalizeRole(req.user?.role) !== 'manager') {
     return res.status(403).json({ error: 'Insufficient role' });
   }
 
@@ -56,8 +63,32 @@ function isManager(req, res, next) {
 }
 
 function enforceTeamAccess(req, itemTeamId) {
-  if (req.user?.role === 'manager') return true;
+  if (normalizeRole(req.user?.role) === 'manager') return true;
   return req.user?.teamId === itemTeamId;
+}
+
+function normalizeRole(role) {
+  return String(role || '').trim().toLowerCase();
+}
+
+function getPendingApproval(user) {
+  const role = normalizeRole(user?.role);
+
+  if (!role || !['manager', 'employee'].includes(role)) {
+    return {
+      code: 'PENDING_APPROVAL',
+      message: 'Your account is pending approval. Please ask a manager/admin to assign your role and team.',
+    };
+  }
+
+  if (role === 'employee' && !user?.teamId) {
+    return {
+      code: 'PENDING_APPROVAL',
+      message: 'Your account is pending approval. Please ask a manager/admin to assign your team.',
+    };
+  }
+
+  return null;
 }
 
 module.exports = {

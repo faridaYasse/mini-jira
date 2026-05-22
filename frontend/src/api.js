@@ -2,6 +2,32 @@ import { getStoredIdToken, logout } from './cognito.js';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
+async function publicRequest(path, options = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
+
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const message =
+      payload?.message ||
+      payload?.error?.message ||
+      payload?.error ||
+      `Request failed with status ${response.status}`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.code = payload?.code || payload?.error?.code;
+    throw error;
+  }
+
+  return payload;
+}
+
 async function request(path, options = {}) {
   const token = getStoredIdToken();
 
@@ -32,11 +58,14 @@ async function request(path, options = {}) {
     }
 
     const message =
+      payload?.message ||
       payload?.error?.message ||
       payload?.error ||
-      payload?.message ||
       `Request failed with status ${response.status}`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    error.code = payload?.code || payload?.error?.code;
+    throw error;
   }
 
   return payload;
@@ -74,7 +103,14 @@ export function createTeam(team) {
 }
 
 export function createEmployee(user) {
-  return request('/api/users/signup', {
+  return request('/api/users/employees', {
+    method: 'POST',
+    body: JSON.stringify(user),
+  });
+}
+
+export function signUpPendingUser(user) {
+  return publicRequest('/api/users/signup', {
     method: 'POST',
     body: JSON.stringify(user),
   });

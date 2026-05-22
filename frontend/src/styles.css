@@ -150,6 +150,12 @@ button {
   margin: 0;
 }
 
+.login-subtitle {
+  color: #5f6a6c;
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+
 .inline-alert {
   background: #fff3df;
   border: 1px solid #e6c58e;
@@ -158,6 +164,12 @@ button {
   font-size: 14px;
   font-weight: 700;
   padding: 10px 12px;
+}
+
+.success-alert {
+  background: #e9f7ee;
+  border-color: #a9d8b8;
+  color: #225a35;
 }
 
 .login-panel label {
@@ -175,6 +187,27 @@ button {
   padding: 0 12px;
 }
 
+.password-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
+
+.password-field input {
+  border-radius: 8px 0 0 8px;
+}
+
+.login-panel .password-toggle {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cbd3d2;
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  color: #314042;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 44px;
+}
+
 .login-panel button {
   background: #1f5d5c;
   border: 1px solid #1f5d5c;
@@ -187,6 +220,29 @@ button {
 .login-panel button:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.login-panel .text-button,
+.auth-switch button {
+  background: transparent;
+  border: 0;
+  color: #1f5d5c;
+  font-weight: 800;
+  min-height: 0;
+  padding: 0;
+}
+
+.auth-switch {
+  color: #5f6a6c;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin: 0;
+}
+
+.pending-panel {
+  text-align: left;
 }
 
 .toolbar {
