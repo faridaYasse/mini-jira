@@ -8,6 +8,7 @@ const usersRouter = require('./src/routes/users');
 const tasksRouter = require('./src/routes/tasks');
 const projectsRouter = require('./src/routes/projects');
 const commentsRouter = require('./src/routes/comments');
+const auditLogsRouter = require('./src/routes/auditLogs');
 
 const app = express();
 
@@ -25,6 +26,8 @@ app.use('/api/users', usersRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/tasks/:taskId/comments', commentsRouter);
+app.use('/api/audit-logs', auditLogsRouter);
+app.use('/api/history', auditLogsRouter);
 
 app.use(express.static(path.join(__dirname, 'frontend/dist')));
 

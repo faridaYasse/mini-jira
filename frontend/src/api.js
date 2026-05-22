@@ -181,6 +181,14 @@ export function uploadTaskImage(taskId, image) {
   });
 }
 
+export function getTaskImage(taskId) {
+  return request(`/api/tasks/${taskId}/image`);
+}
+
+export function listTaskHistory(taskId) {
+  return request(`/api/tasks/${taskId}/history`);
+}
+
 export function listUsers() {
   return request('/api/users');
 }
@@ -202,4 +210,9 @@ export function createComment(taskId, content) {
     method: 'POST',
     body: JSON.stringify({ content }),
   });
+}
+
+export function listAuditLogs(taskId) {
+  const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : '';
+  return request(`/api/audit-logs${query}`);
 }

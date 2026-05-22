@@ -13,11 +13,13 @@ const upload = multer({
   }
 });
 
-router.post('/', authenticateToken, requireRole('manager'), upload.single('image'), tasksController.createTask);
+router.post('/', authenticateToken, requireRole('manager', 'admin'), upload.single('image'), tasksController.createTask);
 router.get('/', authenticateToken, tasksController.listTasks);
+router.get('/:taskId/image', authenticateToken, tasksController.getTaskImage);
+router.get('/:taskId/history', authenticateToken, tasksController.getTaskHistory);
 router.get('/:taskId', authenticateToken, tasksController.getTask);
 router.patch('/:taskId', authenticateToken, tasksController.updateTask);
-router.delete('/:taskId', authenticateToken, requireRole('manager'), tasksController.deleteTask);
+router.delete('/:taskId', authenticateToken, requireRole('manager', 'admin'), tasksController.deleteTask);
 router.post('/:taskId/image', authenticateToken, upload.single('image'), tasksController.uploadImage);
 
 module.exports = router;

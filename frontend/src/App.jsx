@@ -33,8 +33,10 @@ import {
   deleteProject,
   deleteTask,
   getProfile,
+  getTaskImage,
   listComments,
   listProjects,
+  listTaskHistory,
   listTasks,
   listTeams,
   listUsers,
@@ -73,6 +75,7 @@ const EMPTY_TASK = {
 function normalizeTask(task) {
   return {
     ...task,
+    imageUrl: task.imageUrl || task.attachmentUrl || '',
     status: STATUSES.includes(task.status) ? task.status : 'To Do',
   };
 }
@@ -120,6 +123,54 @@ function isOverdue(deadline, status) {
   today.setHours(0, 0, 0, 0);
   due.setHours(0, 0, 0, 0);
   return due < today;
+}
+
+function formatAuditAction(log) {
+  const labels = {
+    task_created: 'Task created',
+    task_updated: 'Task updated',
+    status_changed: 'Status changed',
+    assignee_changed: 'Assignee changed',
+    comment_added: 'Comment added',
+    task_deleted: 'Task deleted',
+  };
+  const action = labels[log.action] || String(log.action || 'activity recorded').replace(/_/g, ' ');
+  const userName = log.userName || log.userId || 'System';
+  return `${action} by ${userName}`;
+}
+
+function formatAuditDetails(log) {
+  const details = log.details || {};
+
+  if (details.message) {
+    return details.message;
+  }
+
+  if (details.oldStatus || details.newStatus) {
+    return `${details.oldStatus || 'Unknown'} -> ${details.newStatus || 'Unknown'}`;
+  }
+
+  if (details.oldAssignee || details.newAssignee) {
+    return `${details.oldAssignee || 'Unassigned'} -> ${details.newAssignee || 'Unassigned'}`;
+  }
+
+  if (details.assigneeId) {
+    return `Assigned to ${details.assigneeId}`;
+  }
+
+  if (Array.isArray(details.fields) && details.fields.length) {
+    return `Updated ${details.fields.join(', ')}`;
+  }
+
+  if (details.teamId) {
+    return `Team: ${details.teamId}`;
+  }
+
+  if (details.hasImage) {
+    return 'Image attached';
+  }
+
+  return '';
 }
 
 function getTeamName(teams, teamId) {
@@ -1125,7 +1176,7 @@ function TaskCard({
       </div>
       <h2>{task.title}</h2>
       <p>{task.description || 'No description provided.'}</p>
-      {task.imageUrl && <img src={task.imageUrl} alt="" className="task-thumb" />}
+      <TaskImage task={task} className="task-thumb" alt="" />
       <footer>
         <span title="Assignee">
           <UserRound size={15} />
@@ -1139,6 +1190,47 @@ function TaskCard({
       </footer>
       {projectName && <div className="project-chip">{projectName}</div>}
     </article>
+  );
+}
+
+function TaskImage({ task, className, alt }) {
+  const [src, setSrc] = useState(task?.imageUrl || '');
+  const [failed, setFailed] = useState(false);
+  const hasImage = Boolean(task?.imageUrl || task?.imageOriginalKey);
+
+  useEffect(() => {
+    let isMounted = true;
+    setFailed(false);
+    setSrc(task?.imageUrl || '');
+
+    if (!task?.imageUrl && task?.imageOriginalKey && task?.taskId) {
+      getTaskImage(task.taskId)
+        .then((result) => {
+          if (isMounted) setSrc(result?.imageUrl || '');
+        })
+        .catch(() => {
+          if (isMounted) setFailed(true);
+        });
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [task?.taskId, task?.imageUrl, task?.imageOriginalKey]);
+
+  if (!hasImage) return null;
+
+  if (failed || !src) {
+    return <div className={`image-unavailable ${className || ''}`}>Image unavailable</div>;
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      onError={() => setFailed(true)}
+    />
   );
 }
 
@@ -1800,9 +1892,12 @@ function TaskDetailModal({
   onReload,
 }) {
   const [comments, setComments] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
   const [commentText, setCommentText] = useState('');
   const [isLoadingComments, setIsLoadingComments] = useState(false);
+  const [isLoadingAudit, setIsLoadingAudit] = useState(false);
   const [commentsError, setCommentsError] = useState('');
+  const [auditError, setAuditError] = useState('');
   const [isPosting, setIsPosting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [editForm, setEditForm] = useState({});
@@ -1826,6 +1921,8 @@ function TaskDetailModal({
     setImageFile(null);
     setImagePreview('');
     setCommentsError('');
+    setAuditError('');
+    setAuditLogs([]);
     setIsLoadingComments(true);
     listComments(task.taskId)
       .then((items) => setComments(normalizeList(items)))
@@ -1834,6 +1931,8 @@ function TaskDetailModal({
         toast.error(error.message);
       })
       .finally(() => setIsLoadingComments(false));
+
+    loadHistory();
   }, [task?.taskId]);
 
   if (!task) return null;
@@ -1854,6 +1953,7 @@ function TaskDetailModal({
     try {
       const updated = await updateTask(task.taskId, { status });
       onTaskUpdated(updated);
+      await loadHistory();
       toast.success('Task updated');
     } catch (error) {
       toast.error(error.message);
@@ -1872,6 +1972,7 @@ function TaskDetailModal({
       }
       onTaskUpdated(updated);
       await onReload();
+      await loadHistory();
       setImageFile(null);
       setImagePreview('');
       toast.success('Task saved');
@@ -1905,12 +2006,29 @@ function TaskDetailModal({
     try {
       const created = await createComment(task.taskId, content);
       setComments((current) => [created, ...current]);
+      await loadHistory();
       setCommentText('');
       toast.success('Comment added');
     } catch (error) {
       toast.error(error.message);
     } finally {
       setIsPosting(false);
+    }
+  }
+
+  async function loadHistory() {
+    if (!task?.taskId) return;
+
+    setIsLoadingAudit(true);
+    setAuditError('');
+
+    try {
+      const items = await listTaskHistory(task.taskId);
+      setAuditLogs(normalizeList(items));
+    } catch (error) {
+      setAuditError(error.status === 404 ? 'History is not available yet.' : error.message || 'History is not available yet.');
+    } finally {
+      setIsLoadingAudit(false);
     }
   }
 
@@ -1932,7 +2050,7 @@ function TaskDetailModal({
           <div className="modal-grid">
             <section>
               <h3>Details</h3>
-              {task.imageUrl && <img src={task.imageUrl} alt="" className="detail-image" />}
+              <TaskImage task={task} className="detail-image" alt="" />
               <div className="detail-list">
                 <span>Priority</span>
                 <strong>{task.priority || 'Normal'}</strong>
@@ -2081,7 +2199,26 @@ function TaskDetailModal({
 
               <section className="audit-note">
                 <h3>History</h3>
-                <p>No audit log endpoint is exposed by the backend yet.</p>
+                {isLoadingAudit ? (
+                  <div className="comments-loading">
+                    <Loader2 className="spin" size={18} />
+                    Loading history
+                  </div>
+                ) : auditError ? (
+                  <p>{auditError}</p>
+                ) : auditLogs.length === 0 ? (
+                  <p>No history yet</p>
+                ) : (
+                  <div className="audit-list">
+                    {auditLogs.map((log) => (
+                      <article key={log.id || log.createdAt} className="audit-entry">
+                        <strong>{formatAuditAction(log)}</strong>
+                        {log.createdAt && <span>{new Date(log.createdAt).toLocaleString()}</span>}
+                        {formatAuditDetails(log) && <p>{formatAuditDetails(log)}</p>}
+                      </article>
+                    ))}
+                  </div>
+                )}
               </section>
             </section>
           </div>

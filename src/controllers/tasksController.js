@@ -44,13 +44,13 @@ async function enrichWithImageUrl(task) {
 
 // Check if employee can access task team
 function canAccessTask(req, task) {
-  if (req.user.role === 'manager') return true;
+  if (['manager', 'admin'].includes(req.user.role)) return true;
   return task.teamId === req.user.teamId;
 }
 
 // Check if employee can modify task
 function canModifyTask(req, task) {
-  if (req.user.role === 'manager') return true;
+  if (['manager', 'admin'].includes(req.user.role)) return true;
 
   return (
     task.teamId === req.user.teamId &&
@@ -146,6 +146,27 @@ async function createTask(req, res, next) {
       });
     }
 
+    await dynamoService.writeAuditLog({
+      action: 'task_created',
+      entityType: 'task',
+      entityId: task.taskId,
+      entityName: task.title,
+      userId: req.user.userId,
+      userName: req.user.name || req.user.email,
+      taskId: task.taskId,
+      details: {
+        message: 'Task was created',
+        status: task.status,
+        priority: task.priority,
+        teamId: task.teamId,
+        assigneeId: task.assigneeId,
+        projectId: task.projectId || '',
+        hasImage: Boolean(task.imageOriginalKey),
+      },
+    }).catch((auditErr) => {
+      console.error('Audit log write failed for task create', auditErr);
+    });
+
     if (process.env.SNS_TASK_ASSIGNMENT_TOPIC) {
       try {
         await sns.send(
@@ -170,7 +191,53 @@ async function createTask(req, res, next) {
       TeamId: task.teamId || teamId,
     });
 
-    return res.status(201).json(task);
+    return res.status(201).json(await enrichWithImageUrl(task));
+  } catch (err) {
+    return next(err);
+  }
+}
+
+// Handles GET /:taskId/image.
+// Returns a signed S3 URL after the caller passes normal task access checks.
+async function getTaskImage(req, res, next) {
+  try {
+    const { taskId } = req.params;
+    const task = await dynamoService.getTaskById(taskId);
+
+    if (!task) {
+      return res.status(404).json({
+        error: 'Task not found',
+      });
+    }
+
+    if (!canAccessTask(req, task)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+      });
+    }
+
+    if (!task.imageOriginalKey) {
+      return res.status(404).json({
+        error: 'Task does not have an image',
+      });
+    }
+
+    if (!ORIGINALS_BUCKET) {
+      return res.status(500).json({
+        error: 'S3_ORIGINALS_BUCKET is not configured',
+      });
+    }
+
+    const imageUrl = await s3Service.getImageUrl(
+      ORIGINALS_BUCKET,
+      task.imageOriginalKey
+    );
+
+    return res.json({
+      taskId,
+      imageUrl,
+      imageOriginalKey: task.imageOriginalKey,
+    });
   } catch (err) {
     return next(err);
   }
@@ -182,7 +249,7 @@ async function listTasks(req, res, next) {
 
     let result;
 
-    if (req.user.role === 'manager') {
+    if (['manager', 'admin'].includes(req.user.role)) {
       result = req.query.teamId
         ? await dynamoService.getTasksByTeam(req.query.teamId, options)
         : await dynamoService.getAllTasks(options);
@@ -222,6 +289,34 @@ async function getTask(req, res, next) {
     }
 
     return res.json(await enrichWithImageUrl(task));
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function getTaskHistory(req, res, next) {
+  try {
+    const { taskId } = req.params;
+    const task = await dynamoService.getTaskById(taskId);
+
+    if (!task) {
+      return res.status(404).json({
+        error: 'Task not found',
+      });
+    }
+
+    if (!canAccessTask(req, task)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+      });
+    }
+
+    const logs = await dynamoService.getAuditLogs({
+      taskId,
+      limit: 100,
+    });
+
+    return res.json(logs);
   } catch (err) {
     return next(err);
   }
@@ -273,15 +368,6 @@ async function updateTask(req, res, next) {
         status,
       };
 
-      // Audit only when the value actually changes
-      if (status !== task.status) {
-        await dynamoService.writeAuditEntry({
-          taskId,
-          changedBy: req.user.userId,
-          fromStatus: task.status,
-          toStatus: status,
-        });
-      }
     } else {
       const {
         taskId: _taskId,
@@ -299,19 +385,11 @@ async function updateTask(req, res, next) {
       }
 
       updates = safeUpdates;
-
-      if (updates.status && updates.status !== task.status) {
-        await dynamoService.writeAuditEntry({
-          taskId,
-          changedBy: req.user.userId,
-          fromStatus: task.status,
-          toStatus: updates.status,
-        });
-      }
     }
 
     const isClosingTask = updates.status === 'Done' && task.status !== 'Done';
     const updated = await dynamoService.updateTask(taskId, updates);
+    await writeTaskUpdateHistory(req, task, updated, updates);
 
     if (isClosingTask) {
       const teamId = task.teamId || updated?.teamId;
@@ -354,6 +432,31 @@ async function deleteTask(req, res, next) {
         error: 'Task not found',
       });
     }
+
+    if (!canAccessTask(req, task)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+      });
+    }
+
+    await dynamoService.writeAuditLog({
+      action: 'task_deleted',
+      entityType: 'task',
+      entityId: taskId,
+      entityName: task.title,
+      userId: req.user.userId,
+      userName: req.user.name || req.user.email,
+      taskId,
+      details: {
+        message: 'Task was deleted',
+        title: task.title,
+        status: task.status,
+        teamId: task.teamId,
+        assigneeId: task.assigneeId,
+      },
+    }).catch((auditErr) => {
+      console.error('Audit log write failed for task delete', auditErr);
+    });
 
     await Promise.all([
       dynamoService.deleteTask(taskId),
@@ -414,9 +517,78 @@ async function uploadImage(req, res, next) {
       imageOriginalKey,
     });
 
+    await dynamoService.writeAuditLog({
+      action: 'task_updated',
+      entityType: 'task',
+      entityId: taskId,
+      entityName: task.title,
+      userId: req.user.userId,
+      userName: req.user.name || req.user.email,
+      taskId,
+      details: {
+        message: 'Task image was uploaded',
+        fields: ['image'],
+        imageOriginalKey,
+      },
+    }).catch((auditErr) => {
+      console.error('Audit log write failed for task image upload', auditErr);
+    });
+
     return res.json(await enrichWithImageUrl(updated));
   } catch (err) {
     return next(err);
+  }
+}
+
+async function writeTaskUpdateHistory(req, previousTask, updatedTask, updates) {
+  const fields = Object.keys(updates || {});
+
+  if (fields.length === 0) return;
+
+  const baseLog = {
+    entityType: 'task',
+    entityId: previousTask.taskId,
+    entityName: updatedTask.title || previousTask.title,
+    userId: req.user.userId,
+    userName: req.user.name || req.user.email,
+    taskId: previousTask.taskId,
+  };
+
+  await dynamoService.writeAuditLog({
+    ...baseLog,
+    action: 'task_updated',
+    details: {
+      message: 'Task was updated',
+      fields,
+    },
+  }).catch((auditErr) => {
+    console.error('Audit log write failed for task update', auditErr);
+  });
+
+  if (updates.status && updates.status !== previousTask.status) {
+    await dynamoService.writeAuditLog({
+      ...baseLog,
+      action: 'status_changed',
+      details: {
+        oldStatus: previousTask.status || '',
+        newStatus: updates.status,
+      },
+    }).catch((auditErr) => {
+      console.error('Audit log write failed for status change', auditErr);
+    });
+  }
+
+  if (updates.assigneeId && updates.assigneeId !== previousTask.assigneeId) {
+    await dynamoService.writeAuditLog({
+      ...baseLog,
+      action: 'assignee_changed',
+      details: {
+        oldAssignee: previousTask.assigneeId || '',
+        newAssignee: updates.assigneeId,
+      },
+    }).catch((auditErr) => {
+      console.error('Audit log write failed for assignee change', auditErr);
+    });
   }
 }
 
@@ -444,6 +616,8 @@ module.exports = {
   createTask,
   listTasks,
   getTask,
+  getTaskImage,
+  getTaskHistory,
   updateTask,
   deleteTask,
   uploadImage,

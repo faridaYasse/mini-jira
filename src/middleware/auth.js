@@ -55,7 +55,7 @@ async function authenticateToken(req, res, next) {
 }
 
 function isManager(req, res, next) {
-  if (normalizeRole(req.user?.role) !== 'manager') {
+  if (!['manager', 'admin'].includes(normalizeRole(req.user?.role))) {
     return res.status(403).json({ error: 'Insufficient role' });
   }
 
@@ -63,7 +63,7 @@ function isManager(req, res, next) {
 }
 
 function enforceTeamAccess(req, itemTeamId) {
-  if (normalizeRole(req.user?.role) === 'manager') return true;
+  if (['manager', 'admin'].includes(normalizeRole(req.user?.role))) return true;
   return req.user?.teamId === itemTeamId;
 }
 
@@ -74,7 +74,7 @@ function normalizeRole(role) {
 function getPendingApproval(user) {
   const role = normalizeRole(user?.role);
 
-  if (!role || !['manager', 'employee'].includes(role)) {
+  if (!role || !['manager', 'admin', 'employee'].includes(role)) {
     return {
       code: 'PENDING_APPROVAL',
       message: 'Your account is pending approval. Please ask a manager/admin to assign your role and team.',

@@ -474,13 +474,52 @@ async function deleteComment(commentId) {
 // ── Audit Log ──────────────────────────────────────────────────────────────────
 
 async function writeAuditEntry({ taskId, changedBy, fromStatus, toStatus }) {
-  const item = {
-    logId: uuidv4(),
+  return writeAuditLog({
+    action: 'status_changed',
+    entityType: 'task',
+    entityId: taskId,
+    userId: changedBy,
+    details: {
+      oldStatus: fromStatus,
+      newStatus: toStatus,
+    },
     taskId,
     changedBy,
     fromStatus,
     toStatus,
+  });
+}
+
+async function writeAuditLog({
+  action,
+  entityType,
+  entityId,
+  entityName,
+  userId,
+  userName,
+  details,
+  taskId,
+  ...extra
+}) {
+  if (!TABLES.AUDITLOG) {
+    return null;
+  }
+
+  const logId = uuidv4();
+  const resolvedEntityId = entityId || taskId || logId;
+  const item = {
+    logId,
+    id: logId,
+    action,
+    entityType,
+    entityId: resolvedEntityId,
+    entityName: entityName || '',
+    userId: userId || '',
+    userName: userName || '',
+    details: details || {},
+    taskId: taskId || (entityType === 'task' ? resolvedEntityId : `${entityType || 'log'}#${resolvedEntityId}`),
     createdAt: new Date().toISOString(),
+    ...extra,
   };
 
   try {
@@ -495,6 +534,64 @@ async function writeAuditEntry({ taskId, changedBy, fromStatus, toStatus }) {
   } catch (err) {
     throw serviceError('AUDIT_WRITE_FAILED', err.message);
   }
+}
+
+async function getAuditLogs({ taskId, limit = 50 } = {}) {
+  if (!TABLES.AUDITLOG) {
+    return [];
+  }
+
+  try {
+    const params = {
+      TableName: TABLES.AUDITLOG,
+    };
+
+    if (taskId) {
+      params.FilterExpression = 'taskId = :taskId OR entityId = :taskId';
+      params.ExpressionAttributeValues = {
+        ':taskId': taskId,
+      };
+    }
+
+    const { Items } = await dynamo.send(new ScanCommand(params));
+    const sorted = (Items || [])
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+      .slice(0, limit);
+
+    return sorted.map(normalizeAuditLog);
+  } catch (err) {
+    throw serviceError('AUDIT_QUERY_FAILED', err.message);
+  }
+}
+
+function normalizeAuditLog(item) {
+  const details = item.details && typeof item.details === 'object'
+    ? item.details
+    : {
+        oldStatus: item.fromStatus || '',
+        newStatus: item.toStatus || '',
+        assigneeId: item.assigneeId || '',
+        teamId: item.teamId || '',
+      };
+
+  return {
+    id: item.id || item.logId,
+    action: item.action || inferAuditAction(item),
+    taskId: item.taskId || item.entityId || '',
+    entityType: item.entityType || 'task',
+    entityId: item.entityId || item.taskId,
+    entityName: item.entityName || item.title || '',
+    userId: item.userId || item.changedBy || '',
+    userName: item.userName || item.changedBy || '',
+    createdAt: item.createdAt,
+    details,
+  };
+}
+
+function inferAuditAction(item) {
+  if (item.toStatus === 'assigned') return 'assignee_changed';
+  if (item.fromStatus || item.toStatus) return 'status_changed';
+  return 'activity_recorded';
 }
 
 module.exports = {
@@ -528,4 +625,6 @@ module.exports = {
 
   // audit
   writeAuditEntry,
+  writeAuditLog,
+  getAuditLogs,
 };

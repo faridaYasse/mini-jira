@@ -28,6 +28,23 @@ async function createComment(req, res, next) {
       content:  req.body.content,
       authorId: req.user.userId,
     });
+
+    await dynamoService.writeAuditLog({
+      action: 'comment_added',
+      entityType: 'task',
+      entityId: taskId,
+      entityName: task.title,
+      userId: req.user.userId,
+      userName: req.user.name || req.user.email,
+      taskId,
+      details: {
+        message: 'Comment was added',
+        commentId: comment.commentId,
+      },
+    }).catch((auditErr) => {
+      console.error('Audit log write failed for comment', auditErr);
+    });
+
     return res.status(201).json(comment);
   } catch (err) {
     next(err);

@@ -434,6 +434,17 @@ select {
   width: 100%;
 }
 
+.image-unavailable {
+  align-items: center;
+  background: #eef3f2;
+  border: 1px dashed #c8d0cf;
+  color: #657073;
+  display: flex;
+  font-size: 13px;
+  justify-content: center;
+  min-height: 92px;
+}
+
 .empty-state {
   align-items: center;
   background: #ffffff;
@@ -825,6 +836,35 @@ select {
 
 .audit-note p {
   margin: 0;
+}
+
+.audit-list {
+  display: grid;
+  gap: 10px;
+}
+
+.audit-entry {
+  background: #f7faf9;
+  border: 1px solid #dfe5e3;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.audit-entry strong {
+  color: #263132;
+  display: block;
+  font-size: 13px;
+}
+
+.audit-entry span {
+  color: #788385;
+  display: block;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.audit-entry p {
+  margin-top: 6px;
 }
 
 @media (max-width: 900px) {

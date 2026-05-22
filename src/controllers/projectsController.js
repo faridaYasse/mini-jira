@@ -10,6 +10,21 @@ async function createProject(req, res, next) {
       description,
       createdBy: req.user.userId,
     });
+
+    await dynamoService.writeAuditLog({
+      action: 'project created',
+      entityType: 'project',
+      entityId: project.projectId,
+      entityName: project.name,
+      userId: req.user.userId,
+      userName: req.user.name || req.user.email,
+      details: {
+        description: project.description || '',
+      },
+    }).catch((auditErr) => {
+      console.error('Audit log write failed for project create', auditErr);
+    });
+
     return res.status(201).json(project);
   } catch (err) {
     next(err);

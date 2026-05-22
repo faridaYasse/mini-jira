@@ -5,6 +5,7 @@ const router = express.Router();
 
 const { authenticate, isManager } = require("../middleware/auth");
 const { docClient } = require("../config/dynamodb");
+const dynamoService = require("../services/dynamoService");
 
 const {
   PutCommand,
@@ -293,6 +294,22 @@ router.post("/employees", authenticate, isManager, async (req, res) => {
       })
     );
 
+    await dynamoService.writeAuditLog({
+      action: "employee created",
+      entityType: "user",
+      entityId: userId,
+      entityName: name,
+      userId: req.user.userId,
+      userName: req.user.name || req.user.email,
+      details: {
+        email,
+        teamId,
+        role: userRole,
+      },
+    }).catch((auditErr) => {
+      console.error("Audit log write failed for employee create", auditErr);
+    });
+
     return res.status(201).json({
       message: "Employee created successfully. They may need to confirm their email before signing in.",
       user: {
@@ -552,6 +569,20 @@ router.post("/teams", authenticate, isManager, async (req, res) => {
       })
     );
 
+    await dynamoService.writeAuditLog({
+      action: "team created",
+      entityType: "team",
+      entityId: teamId,
+      entityName: teamName,
+      userId: req.user.userId,
+      userName: req.user.name || req.user.email,
+      details: {
+        teamId,
+      },
+    }).catch((auditErr) => {
+      console.error("Audit log write failed for team create", auditErr);
+    });
+
     return res.status(201).json({
       message: "Team created successfully",
       team,
@@ -678,6 +709,23 @@ router.post("/teams/:teamId/members", authenticate, isManager, async (req, res) 
       teamId,
       role: "employee",
       status: "active",
+    });
+
+    await dynamoService.writeAuditLog({
+      action: wasPending ? "employee approved" : "employee team updated",
+      entityType: "user",
+      entityId: userId,
+      entityName: userResult.Item.name || email,
+      userId: req.user.userId,
+      userName: req.user.name || req.user.email,
+      details: {
+        email,
+        teamId,
+        role: "employee",
+        status: "active",
+      },
+    }).catch((auditErr) => {
+      console.error("Audit log write failed for employee approval", auditErr);
     });
 
     return res.json({
