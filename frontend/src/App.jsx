@@ -123,7 +123,7 @@ function isOverdue(deadline, status) {
 }
 
 function getTeamName(teams, teamId) {
-  return teams.find((team) => team.teamId === teamId)?.teamName || teamId;
+  return teams.find((team) => getTeamId(team) === teamId)?.teamName || teamId;
 }
 
 function getUserLabel(users, userId) {
@@ -145,6 +145,25 @@ function getUserTeamId(user) {
 
 function getUserDisplayName(user) {
   return user?.name || user?.email || user?.userId || '';
+}
+
+function getTeamId(team) {
+  return team?.teamId || team?.id || '';
+}
+
+function getTeamLabel(team) {
+  return team?.teamName || team?.name || formatTeamIdLabel(team?.teamId || team?.id || '');
+}
+
+function formatTeamIdLabel(teamId) {
+  if (!teamId) return '';
+
+  return String(teamId)
+    .replace(/-team$/i, '')
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 function getEmployeeUsers(users) {
@@ -169,18 +188,34 @@ function getTeamOptions(teams, users = []) {
       .map((user) => getUserTeamId(user))
       .filter(Boolean)
   );
-  const optionsById = new Map();
+  const optionsByLabel = new Map();
 
   teams.forEach((team) => {
-    if (!team.teamId) return;
+    const teamId = getTeamId(team);
+    const teamName = getTeamLabel(team);
+    if (!teamId) return;
 
-    optionsById.set(team.teamId, {
-      teamId: team.teamId,
-      teamName: team.teamName || team.name || team.teamId,
-    });
+    const option = {
+      teamId,
+      teamName: teamName || teamId,
+    };
+    const labelKey = String(option.teamName).trim().toLowerCase();
+
+    if (!labelKey || !optionsByLabel.has(labelKey)) {
+      optionsByLabel.set(labelKey || teamId, option);
+      return;
+    }
+
+    const current = optionsByLabel.get(labelKey);
+    const currentHasFriendlyName = current.teamName && current.teamName !== current.teamId;
+    const optionHasFriendlyName = option.teamName && option.teamName !== option.teamId;
+
+    if (!currentHasFriendlyName && optionHasFriendlyName) {
+      optionsByLabel.set(labelKey, option);
+    }
   });
 
-  return [...optionsById.values()].sort((a, b) => {
+  return [...optionsByLabel.values()].sort((a, b) => {
     const aHasUsers = employeeTeamIds.has(String(a.teamId));
     const bHasUsers = employeeTeamIds.has(String(b.teamId));
 
@@ -1382,7 +1417,7 @@ function EmployeeFormModal({ open, onOpenChange, teams, onCreated }) {
   const [form, setForm] = useState({
     name: '',
     email: '',
-    password: '',
+    temporaryPassword: '',
     teamId: '',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1390,7 +1425,7 @@ function EmployeeFormModal({ open, onOpenChange, teams, onCreated }) {
 
   useEffect(() => {
     if (!open) {
-      setForm({ name: '', email: '', password: '', teamId: '' });
+      setForm({ name: '', email: '', temporaryPassword: '', teamId: '' });
     }
   }, [open]);
 
@@ -1435,15 +1470,15 @@ function EmployeeFormModal({ open, onOpenChange, teams, onCreated }) {
               </label>
               <label>
                 Temporary password
-                <input required type="password" value={form.password} onChange={(event) => updateField('password', event.target.value)} />
+                <input required type="password" value={form.temporaryPassword} onChange={(event) => updateField('temporaryPassword', event.target.value)} />
               </label>
               <label>
                 Team
-                <select value={form.teamId} onChange={(event) => updateField('teamId', event.target.value)}>
-                  <option value="">No team yet</option>
+                <select required value={form.teamId} onChange={(event) => updateField('teamId', event.target.value)}>
+                  <option value="">Select team</option>
                   {teamOptions.map((team) => (
                     <option key={team.teamId} value={team.teamId}>
-                      {team.teamName || team.teamId}
+                      {team.teamName}
                     </option>
                   ))}
                 </select>
@@ -1453,7 +1488,7 @@ function EmployeeFormModal({ open, onOpenChange, teams, onCreated }) {
               Cognito may require email confirmation before the employee can sign in.
             </span>
             <div className="form-actions">
-              <button className="primary-button" type="submit" disabled={isSubmitting}>
+              <button className="primary-button" type="submit" disabled={isSubmitting || !form.teamId}>
                 {isSubmitting ? <Loader2 className="spin" size={17} /> : <UserPlus size={17} />}
                 Create Employee
               </button>

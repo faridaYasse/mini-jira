@@ -105,7 +105,13 @@ export function createTeam(team) {
 export function createEmployee(user) {
   return request('/api/users/employees', {
     method: 'POST',
-    body: JSON.stringify(user),
+    body: JSON.stringify({
+      name: user.name,
+      email: user.email,
+      temporaryPassword: user.temporaryPassword,
+      teamId: user.teamId,
+      role: 'employee',
+    }),
   });
 }
 

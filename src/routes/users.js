@@ -49,6 +49,50 @@ function normalizeRole(role) {
   return String(role || "").trim().toLowerCase();
 }
 
+function normalizeLabel(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function authErrorResponse(err) {
+  if (err.name === "UsernameExistsException") {
+    return {
+      status: 409,
+      body: {
+        code: err.name,
+        message: "An account with this email already exists.",
+      },
+    };
+  }
+
+  if (err.name === "InvalidPasswordException") {
+    return {
+      status: 400,
+      body: {
+        code: err.name,
+        message: "Temporary password does not meet the required security rules.",
+      },
+    };
+  }
+
+  if (err.name === "InvalidParameterException") {
+    return {
+      status: 400,
+      body: {
+        code: err.name,
+        message: "Please check the employee information and try again.",
+      },
+    };
+  }
+
+  return {
+    status: 502,
+    body: {
+      code: err.name || "COGNITO_CREATE_FAILED",
+      message: "Cognito could not create the employee. Please try again.",
+    },
+  };
+}
+
 function getApprovalStatus(role, teamId) {
   const normalizedRole = normalizeRole(role);
   if (normalizedRole === "employee" && teamId) return "active";
@@ -192,11 +236,12 @@ router.post("/signup", async (req, res) => {
 router.post("/employees", authenticate, isManager, async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
-    const { password, name, teamId } = req.body;
+    const { name, teamId } = req.body;
+    const temporaryPassword = req.body.temporaryPassword || req.body.password;
 
-    if (isMissing(email) || isMissing(password) || isMissing(name) || isMissing(teamId)) {
+    if (isMissing(email) || isMissing(temporaryPassword) || isMissing(name) || isMissing(teamId)) {
       return res.status(400).json({
-        message: "email, password, name, and teamId are required",
+        message: "email, temporaryPassword, name, and teamId are required",
       });
     }
 
@@ -218,7 +263,7 @@ router.post("/employees", authenticate, isManager, async (req, res) => {
       new SignUpCommand({
         ClientId: COGNITO_CLIENT_ID,
         Username: email,
-        Password: password,
+        Password: temporaryPassword,
         UserAttributes: [
           { Name: "email", Value: email },
           { Name: "name", Value: name },
@@ -249,20 +294,19 @@ router.post("/employees", authenticate, isManager, async (req, res) => {
     );
 
     return res.status(201).json({
-      message: "Employee registered successfully. They may need to confirm their email before signing in.",
+      message: "Employee created successfully. They may need to confirm their email before signing in.",
       user: {
         userId,
         email,
         name,
         role: userRole,
         teamId,
+        status: "active",
       },
     });
   } catch (err) {
-    return res.status(400).json({
-      code: err.name,
-      message: err.message,
-    });
+    const response = authErrorResponse(err);
+    return res.status(response.status).json(response.body);
   }
 });
 
@@ -469,6 +513,24 @@ router.post("/teams", authenticate, isManager, async (req, res) => {
     if (isMissing(teamName)) {
       return res.status(400).json({
         message: "teamName is required",
+      });
+    }
+
+    const existingTeams = await docClient.send(
+      new ScanCommand({
+        TableName: TEAMS_TABLE,
+      })
+    );
+    const normalizedTeamName = normalizeLabel(teamName);
+    const duplicateTeam = (existingTeams.Items || []).find((team) =>
+      normalizeLabel(team.teamName || team.name || team.teamId) === normalizedTeamName
+    );
+
+    if (duplicateTeam) {
+      return res.status(409).json({
+        code: "TEAM_ALREADY_EXISTS",
+        message: "A team with this name already exists.",
+        team: duplicateTeam,
       });
     }
 
