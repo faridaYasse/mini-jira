@@ -3,6 +3,10 @@
 ## Live Application
 https://d23kwe4cyjml0b.cloudfront.net
 
+## Demo Video
+[Watch Demo](https://drive.google.com/file/d/19u7bBWthR2wXaF85BiDvr1HcWHfmbvEl/view?usp=drive_link)
+
+
 ## Architecture Diagram
 ![Architecture](docs/architecture.png)
 
